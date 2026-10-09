@@ -1,0 +1,452 @@
+{
+  "name": "Community FAQ Generator - n8n",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1000,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "2",
+      "name": "Scheduled Run",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1000,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "community-faq",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "3",
+      "name": "Community Chat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1000,
+        360
+      ],
+      "webhookId": "community-faq"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body=$json.body??$json;\nconst messages=body.messages??[\n{id:\"1\",user:\"alice\",text:\"How do I reset my password?\",thread_ts:\"1\"},\n{id:\"2\",user:\"bob\",text:\"Go to Settings > Security and choose Reset Password.\",thread_ts:\"1\"},\n{id:\"3\",user:\"carol\",text:\"Where can I find the project documentation?\",thread_ts:\"3\"},\n{id:\"4\",user:\"dave\",text:\"The docs are available in the shared project folder.\",thread_ts:\"3\"}];\nreturn [{json:{mode:body.mode??\"offline\",messages,receivedAt:new Date().toISOString()}}];"
+      },
+      "id": "4",
+      "name": "Orchestrator - Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -760,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.mode }}",
+              "rightValue": "online",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "5",
+      "name": "Online or Offline?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -520,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{source:\"slack\",messages:$json.messages,mode:\"online\",receivedAt:$json.receivedAt}}];"
+      },
+      "id": "6",
+      "name": "Listener Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -280,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{source:\"offline-export\",messages:$json.messages,mode:\"offline\",receivedAt:$json.receivedAt}}];"
+      },
+      "id": "7",
+      "name": "Ingestion Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -280,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const messages=$json.messages||[]; const questions=[];\nfor(const m of messages){const text=String(m.text||\"\").trim(); if(!text)continue;\nconst looks=/\\?\\s*$/.test(text)||/^(how|what|where|when|why|who|which|can|could|is|are|do|does|did|will|should)\\b/i.test(text);\nif(!looks)continue;\nconst replies=messages.filter(r=>r.id!==m.id&&((m.thread_ts&&r.thread_ts===m.thread_ts)||(m.thread_ts&&r.ts===m.thread_ts))).map(r=>({user:r.user||\"unknown\",text:String(r.text||\"\")})).filter(r=>r.text);\nquestions.push({question:text,questionId:m.id||m.ts||String(questions.length+1),user:m.user||\"unknown\",replies});}\nreturn [{json:{...$json,candidates:questions}}];"
+      },
+      "id": "8",
+      "name": "Extractor Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const candidates=$json.candidates||[]; const groups=[];\nfunction key(q){return q.toLowerCase().replace(/[^a-z0-9\\s]/g,\" \").replace(/\\b(please|can|could|i|we|you|do|does|is|are|the|a|an)\\b/g,\" \").replace(/\\s+/g,\" \").trim();}\nfor(const item of candidates){const k=key(item.question); let group=groups.find(g=>{const a=new Set(g.key.split(\" \")),b=new Set(k.split(\" \"));const overlap=[...a].filter(x=>b.has(x)).length;return overlap>=Math.min(3,Math.max(1,Math.ceil(Math.min(a.size,b.size)*0.5)));});\nif(!group){group={clusterId:`FAQ-${groups.length+1}`,key:k,questions:[]};groups.push(group);} group.questions.push(item);}\nreturn [{json:{...$json,clusters:groups}}];"
+      },
+      "id": "9",
+      "name": "Clustering Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.OPENAI_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {model:'gpt-4o-mini',temperature:0.2,response_format:{type:'json_object'},messages:[{role:'system',content:'You are the Answer-Synthesis Agent for a community FAQ system. Create concise, factual FAQ entries only from supplied conversation evidence. Do not invent information. Return JSON with an array named faq.'},{role:'user',content:'Create one FAQ entry per cluster. Each entry must contain clusterId, question, answer, confidence (0 to 1), category, and evidence. Data:\\n'+JSON.stringify($json.clusters)}]} }}",
+        "options": {}
+      },
+      "id": "10",
+      "name": "Answer-Synthesis Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw=$json.choices?.[0]?.message?.content??'{\"faq\":[]}'; let parsed;\ntry{parsed=typeof raw===\"string\"?JSON.parse(raw):raw}catch(e){parsed={faq:[],parseError:e.message,raw};}\nconst faq=(parsed.faq||[]).map(x=>({...x,reviewRequired:Number(x.confidence??0)<0.75||!x.answer}));\nreturn [{json:{faq,reviewSummary:{total:faq.length,needsHumanReview:faq.filter(x=>x.reviewRequired).length},generatedAt:new Date().toISOString()}}];"
+      },
+      "id": "11",
+      "name": "Review Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.reviewSummary.needsHumanReview }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "12",
+      "name": "Human Review Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const faq=$json.faq||[]; const approved=faq.filter(x=>!x.reviewRequired); let md='# Community FAQ\\n\\n';\nfor(const item of approved){md+=`## ${item.question}\\n\\n${item.answer}\\n\\n**Category:** ${item.category||'General'}  \\n**Confidence:** ${item.confidence??'N/A'}\\n\\n`;}\nreturn [{json:{...$json,markdown:md,approvedFaq:approved}}];"
+      },
+      "id": "13",
+      "name": "Formatter Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{status:\"HUMAN_REVIEW_REQUIRED\",reviewItems:($json.faq||[]).filter(x=>x.reviewRequired),message:\"Approve, edit, or reject flagged FAQ entries before publishing.\"}}];"
+      },
+      "id": "14",
+      "name": "Prepare Human Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{status:\"FAQ_READY\",mode:$json.mode||\"offline\",markdown:$json.markdown||\"\",faq:$json.approvedFaq||$json.faq||[],publishedAt:new Date().toISOString()}}];"
+      },
+      "id": "15",
+      "name": "Publisher Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{runStatus:\"completed\",workflow:\"Community FAQ Generator\",timestamp:new Date().toISOString(),sourceMode:$json.mode,faqCount:($json.faq||$json.approvedFaq||[]).length,nextAction:\"Schedule next update or run manually.\"}}];"
+      },
+      "id": "16",
+      "name": "Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Orchestrator - Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scheduled Run": {
+      "main": [
+        [
+          {
+            "node": "Orchestrator - Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Community Chat Webhook": {
+      "main": [
+        [
+          {
+            "node": "Orchestrator - Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orchestrator - Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Online or Offline?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Online or Offline?": {
+      "main": [
+        [
+          {
+            "node": "Listener Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ingestion Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Listener Agent": {
+      "main": [
+        [
+          {
+            "node": "Extractor Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingestion Agent": {
+      "main": [
+        [
+          {
+            "node": "Extractor Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extractor Agent": {
+      "main": [
+        [
+          {
+            "node": "Clustering Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clustering Agent": {
+      "main": [
+        [
+          {
+            "node": "Answer-Synthesis Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer-Synthesis Agent": {
+      "main": [
+        [
+          {
+            "node": "Review Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Agent": {
+      "main": [
+        [
+          {
+            "node": "Human Review Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Human Review Needed?": {
+      "main": [
+        [
+          {
+            "node": "Formatter Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Human Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatter Agent": {
+      "main": [
+        [
+          {
+            "node": "Publisher Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publisher Agent": {
+      "main": [
+        [
+          {
+            "node": "Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "community-faq-v1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
