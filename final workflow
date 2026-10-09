@@ -1,0 +1,164 @@
+{
+  "name": "Community FAQ Generator - Manual Input + Groq + Simple Memory (Fixed)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Community FAQ Generator",
+        "formDescription": "Paste a Slack or community conversation and generate a structured FAQ using Groq.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Conversation",
+              "fieldType": "textarea",
+              "placeholder": "Paste your Slack/community conversation here...",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Generate FAQ"
+        }
+      },
+      "id": "b5a25eac-a880-450a-a474-128ba5566e1e",
+      "name": "Manual FAQ Input",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        3200,
+        976
+      ],
+      "webhookId": "8b38ed3c-a98b-4d54-9f3a-f70b1e5e74aa"
+    },
+    {
+      "parameters": {
+        "jsCode": "const conversation = $json.Conversation || $json.conversation || '';\n\nconst memory = $getWorkflowStaticData('global');\nif (!memory.faqHistory) {\n  memory.faqHistory = [];\n}\n\nreturn [{\n  json: {\n    conversation,\n    previousFaqs: memory.faqHistory.slice(-10)\n  }\n}];"
+      },
+      "id": "e32dc1d9-e05d-4ec8-a7bc-c52f404e5950",
+      "name": "Simple Memory",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3424,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ model: 'qwen/qwen3.8-27b', temperature: 0.2, messages: [{ role: 'system', content: 'You are the Community FAQ Generator. Extract question-answer pairs from the supplied conversation, merge duplicate or very similar questions, and write clear concise answers using only information present in the conversation. Return ONLY valid JSON in this exact format: {\"faqs\":[{\"question\":\"...\",\"answer\":\"...\",\"category\":\"...\",\"confidence\":\"High|Medium|Low\"}]}. Do not invent information.' }, { role: 'user', content: 'Conversation:\\n' + $json.conversation + '\\n\\nPrevious FAQ memory:\\n' + JSON.stringify($json.previousFaqs) } ] }) }}",
+        "options": {}
+      },
+      "id": "6e0c4b63-f16c-4b07-963b-cc5bb8c5410c",
+      "name": "Groq FAQ Generator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3648,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $json.choices?.[0]?.message?.content || '';\n\nlet clean = content\n  .replace(/^```json\\s*/i, '')\n  .replace(/^```\\s*/i, '')\n  .replace(/```$/i, '')\n  .trim();\n\nlet result;\n\ntry {\n  result = JSON.parse(clean);\n} catch (error) {\n  result = {\n    faqs: [],\n    error: 'Groq returned invalid JSON.',\n    raw: clean\n  };\n}\n\nconst memory = $getWorkflowStaticData('global');\n\nif (!memory.faqHistory) {\n  memory.faqHistory = [];\n}\n\nif (Array.isArray(result.faqs)) {\n  memory.faqHistory.push(...result.faqs);\n  memory.faqHistory = memory.faqHistory.slice(-20);\n}\n\nconst html = result.faqs?.length\n  ? result.faqs.map((faq, index) => `\n      <div style=\"background:#ffffff;border-radius:12px;padding:20px;margin:15px 0;box-shadow:0 3px 12px rgba(0,0,0,.08)\">\n        <h3 style=\"color:#2563eb;margin-top:0\">${index + 1}. ${String(faq.question || '').replace(/</g,'&lt;')}</h3>\n        <p style=\"line-height:1.6\">${String(faq.answer || '').replace(/</g,'&lt;')}</p>\n        <small style=\"color:#666\">\n          Category: ${String(faq.category || 'General').replace(/</g,'&lt;')}\n          &nbsp; | &nbsp;\n          Confidence: ${String(faq.confidence || 'Medium').replace(/</g,'&lt;')}\n        </small>\n      </div>\n    `).join('')\n  : '<div style=\"background:#fff7ed;padding:20px;border-radius:10px\">No FAQ entries were generated.</div>';\n\nreturn [{\n  json: {\n    ...result,\n    html\n  }\n}];"
+      },
+      "id": "4d615955-2561-480e-822c-7cb1cc8569e8",
+      "name": "Format FAQ HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3872,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "FAQ Result",
+        "completionMessage": "={{\n$json.faqs\n  .map((faq, index) =>\n    `${index + 1}. ${faq.question}\\n\\nAnswer: ${faq.answer}\\nCategory: ${faq.category}\\nConfidence: ${faq.confidence}`\n  )\n  .join(\"\\n\\n--------------------\\n\\n\")\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        4096,
+        976
+      ],
+      "id": "afc79ca3-30d2-4f38-b3d8-5a98087d931a",
+      "name": "Form",
+      "webhookId": "fe6905f5-cf24-456e-aee3-3db28fdfb7dd"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual FAQ Input": {
+      "main": [
+        [
+          {
+            "node": "Simple Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "main": [
+        [
+          {
+            "node": "Groq FAQ Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq FAQ Generator": {
+      "main": [
+        [
+          {
+            "node": "Format FAQ HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format FAQ HTML": {
+      "main": [
+        [
+          {
+            "node": "Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "93eaaeee-27d9-4f91-ac67-2c7f2838b751",
+  "meta": {
+    "instanceId": "67d01d5ebffd200d55e053e6869065aab2e274aa89df45dd54a44cf095ad3164"
+  },
+  "nodeGroups": [],
+  "id": "nORuvhGiN8rQqh7S",
+  "tags": []
+}
